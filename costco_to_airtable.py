@@ -6,6 +6,7 @@ This script:
 1. Fetches deals from Costco's API
 2. Parses product data
 3. Saves to Airtable Products table
+4. Tracks price history
 """
 
 import requests
@@ -101,63 +102,112 @@ def parse_product(item):
             except:
                 pass
     
+    # Extract product name and brand
+    product_name = item.get('item_product_name', 'Unknown')
+    brand = item.get('Brand_attr', [None])[0] if item.get('Brand_attr') else None
+    
+    # Determine product group (for better organization)
+    product_group = 'Unknown'
+    if brand:
+        product_group = brand
+    
     return {
-        'Product Name': item.get('item_product_name', 'Unknown'),
+        'Product Name': product_name,
+        'Product Group': product_group,
+        'Brand': brand,
         'Costco SKU': item.get('item_number'),
         'Costco Price': item.get('item_location_pricing_salePrice'),
         'Costco Original Price': item.get('item_location_pricing_listPrice'),
         'Costco Discount': discount_amount,
+        'Costco URL': f"https://www.costco.com/{item.get('item_number')}.product.{item.get('item_number')}.html" if item.get('item_number') else None,
         'In Stock': item.get('item_location_availability') == 'in stock',
-        'Brand': item.get('Brand_attr', [None])[0] if item.get('Brand_attr') else None,
         'Rating': item.get('item_ratings'),
         'Image URL': item.get('item_collateral_primaryimage'),
-        'Costco URL': f"https://www.costco.com/p/-/{item.get('item_number')}" if item.get('item_number') else None,
-        'Last Updated': datetime.now().isoformat(),
-        'Status': 'New'
+        'Category': item.get('item_primary_category', ['Unknown'])[0] if item.get('item_primary_category') else 'Unknown',
+        'Date Found': datetime.now().isoformat(),
+        'Last Updated': datetime.now().isoformat()
     }
 
 def save_to_airtable(products):
     """
-    Save products to Airtable
+    Save products to Airtable with historical price tracking
     
     Args:
         products: List of product dicts (Airtable formatted)
         
     Returns:
-        Number of products saved
+        Number of products saved/updated
     """
     
     print(f"\n💾 Saving {len(products)} products to Airtable...")
     
     saved_count = 0
+    updated_count = 0
     skipped_count = 0
     error_count = 0
     
     for product in products:
         try:
             costco_sku = product.get('Costco SKU')
-            if costco_sku:
-                existing = utils.find_product_by_costco_sku(costco_sku)
-                
-                if existing:
-                    print(f"   ⏭️  Skipping {costco_sku} (already exists)")
-                    skipped_count += 1
-                    continue
+            if not costco_sku:
+                print(f"   ⚠️  Skipping product without SKU")
+                skipped_count += 1
+                continue
             
-            utils.create_product(product)
-            print(f"   ✅ Saved: {product['Product Name'][:50]}... (${product['Costco Price']})")
-            saved_count += 1
+            # Check if product already exists
+            existing = utils.find_product_by_costco_sku(costco_sku)
+            
+            if existing:
+                # Product exists - check if price changed
+                existing_price = existing['fields'].get('Costco Price')
+                new_price = product.get('Costco Price')
+                
+                if existing_price != new_price:
+                    # Price changed - update and log to history
+                    utils.update_product(existing['id'], {
+                        'Costco Price': new_price,
+                        'Costco Original Price': product.get('Costco Original Price'),
+                        'Costco Discount': product.get('Costco Discount'),
+                        'In Stock': product.get('In Stock'),
+                        'Last Updated': datetime.now().isoformat()
+                    })
+                    
+                    # Log price change to Price History table
+                    utils.log_price_history(
+                        product_id=existing['id'],
+                        costco_sku=costco_sku,
+                        product_name=product['Product Name'],
+                        old_price=existing_price,
+                        new_price=new_price
+                    )
+                    
+                    print(f"   🔄 Updated: {product['Product Name'][:50]}... (${existing_price} → ${new_price})")
+                    updated_count += 1
+                else:
+                    # No price change - just update Last Updated
+                    utils.update_product(existing['id'], {
+                        'Last Updated': datetime.now().isoformat(),
+                        'In Stock': product.get('In Stock')
+                    })
+                    print(f"   ⏭️  No change: {costco_sku}")
+                    skipped_count += 1
+            else:
+                # New product - create it
+                utils.create_product(product)
+                print(f"   ✅ Saved: {product['Product Name'][:50]}... (${product['Costco Price']})")
+                saved_count += 1
             
         except Exception as e:
             print(f"   ❌ Error saving product: {e}")
             error_count += 1
     
     print(f"\n📊 Summary:")
-    print(f"   ✅ Saved: {saved_count}")
-    print(f"   ⏭️  Skipped (duplicates): {skipped_count}")
+    print(f"   ✅ New products: {saved_count}")
+    print(f"   🔄 Updated prices: {updated_count}")
+    print(f"   ⏭️  No changes: {skipped_count}")
     print(f"   ❌ Errors: {error_count}")
     
-    return saved_count
+    return saved_count + updated_count
 
 def main():
     """Main execution"""
@@ -185,7 +235,7 @@ def main():
     
     print()
     print("=" * 70)
-    print(f"✅ SYNC COMPLETE! Saved {saved} new products to Airtable")
+    print(f"✅ SYNC COMPLETE! Processed {saved} products")
     print("=" * 70)
 
 if __name__ == "__main__":
