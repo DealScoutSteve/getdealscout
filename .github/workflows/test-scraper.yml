@@ -25,6 +25,5 @@ jobs:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
         run: |
           python costco_scraper.py
