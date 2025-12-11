@@ -1,0 +1,38 @@
+name: Sync Costco to Airtable
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+  
+  # Scheduled daily at 10 AM UTC (2 AM PST)
+  schedule:
+    - cron: '0 10 * * *'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Run Costco to Airtable sync
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        run: |
+          python costco_to_airtable.py
+      
+      - name: Report completion
+        if: always()
+        run: |
+          echo "Sync completed at $(date)"
