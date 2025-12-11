@@ -1,0 +1,144 @@
+name: Test Costco API
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests
+      
+      - name: Test Costco Search API
+        run: |
+          python - <<'EOF'
+          import requests
+          import json
+          
+          print("=" * 70)
+          print("🧪 TESTING COSTCO SEARCH API")
+          print("=" * 70)
+          print()
+          
+          # API endpoint
+          url = "https://search.costco.com/api/apps/www_costco_com/query/www_costco_com_search"
+          
+          # Headers (including the API key)
+          headers = {
+              'x-api-key': '273db6be-f015-4de7-b0d6-dd4746ccd5c3',
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+              'Accept': 'application/json',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Referer': 'https://www.costco.com/',
+              'Origin': 'https://www.costco.com',
+              'Content-Type': 'application/json',
+              'Sec-Fetch-Dest': 'empty',
+              'Sec-Fetch-Mode': 'cors',
+              'Sec-Fetch-Site': 'same-site'
+          }
+          
+          # Parameters
+          params = {
+              'expoption': 'lucidworks',
+              'q': 'OFF',  # Search for deals
+              'locale': 'en-US',
+              'start': 0,
+              'rows': 5,  # Just 5 products for testing
+              'sort': 'item_page_views desc'
+          }
+          
+          try:
+              print("📡 Making request to Costco API...")
+              print(f"   URL: {url}")
+              print(f"   Query: {params['q']}")
+              print(f"   Rows: {params['rows']}")
+              print()
+              
+              response = requests.get(url, params=params, headers=headers, timeout=15)
+              
+              print(f"📊 Response Status: {response.status_code}")
+              print()
+              
+              if response.status_code == 200:
+                  print("✅ SUCCESS! API is accessible from GitHub Actions!")
+                  print()
+                  
+                  data = response.json()
+                  
+                  # Summary
+                  total_found = data['response']['numFound']
+                  retrieved = len(data['response']['docs'])
+                  
+                  print(f"📦 Total Products Available: {total_found:,}")
+                  print(f"📥 Retrieved: {retrieved} products")
+                  print()
+                  print("=" * 70)
+                  print("SAMPLE PRODUCTS")
+                  print("=" * 70)
+                  
+                  # Show each product
+                  for i, product in enumerate(data['response']['docs'], 1):
+                      print()
+                      print(f"Product #{i}")
+                      print("-" * 70)
+                      print(f"Name:           {product.get('item_product_name', 'N/A')[:60]}")
+                      print(f"Item Number:    {product.get('item_number', 'N/A')}")
+                      print(f"Sale Price:     ${product.get('item_location_pricing_salePrice', 'N/A')}")
+                      print(f"Original Price: ${product.get('item_location_pricing_listPrice', 'N/A')}")
+                      print(f"Discount:       {product.get('item_product_marketing_statement', 'N/A')}")
+                      print(f"In Stock:       {product.get('item_location_availability', 'N/A')}")
+                      print(f"Brand:          {product.get('Brand_attr', ['N/A'])[0]}")
+                      print(f"Rating:         {product.get('item_ratings', 'N/A')}")
+                  
+                  print()
+                  print("=" * 70)
+                  print("✅ API TEST PASSED - ALL DATA EXTRACTED SUCCESSFULLY!")
+                  print("=" * 70)
+                  
+                  # Save sample data
+                  print()
+                  print("💾 Sample JSON structure:")
+                  print(json.dumps(data['response']['docs'][0], indent=2)[:500] + "...")
+                  
+              elif response.status_code == 403:
+                  print("❌ BLOCKED: 403 Forbidden")
+                  print("   GitHub Actions IP may be blocked by Costco")
+                  print()
+                  print("Response headers:")
+                  for key, value in response.headers.items():
+                      print(f"   {key}: {value}")
+                  
+              elif response.status_code == 401:
+                  print("❌ UNAUTHORIZED: 401")
+                  print("   API key may be invalid or expired")
+                  print()
+                  print(f"Response: {response.text[:500]}")
+                  
+              else:
+                  print(f"❌ UNEXPECTED STATUS: {response.status_code}")
+                  print()
+                  print(f"Response: {response.text[:500]}")
+                  
+          except requests.exceptions.Timeout:
+              print("❌ TIMEOUT: Request took too long")
+              
+          except requests.exceptions.ConnectionError as e:
+              print(f"❌ CONNECTION ERROR: {e}")
+              
+          except Exception as e:
+              print(f"❌ ERROR: {e}")
+              import traceback
+              traceback.print_exc()
+          
+          EOF
+
