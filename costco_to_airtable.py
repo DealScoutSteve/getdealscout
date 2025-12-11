@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""
-Fetch Costco deals and save to Airtable
-
-This script:
-1. Fetches deals from Costco's API
-2. Parses product data
-3. Saves to Airtable Products table
-"""
-
 import requests
 import json
 from datetime import datetime
