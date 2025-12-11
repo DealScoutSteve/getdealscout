@@ -236,17 +236,3 @@ HTML:
 
 if __name__ == "__main__":
     test_extraction_with_sample()
-```
-
----
-
-## **What URL Should We Test?**
-
-**Option 1: Single Product Page** (easier to verify)
-```
-https://www.costco.com/dyson-v15-detect-extra-cordless-vacuum.product.4000225723.html
-```
-
-**Option 2: Deals Page** (real use case)
-```
-https://www.costco.com/warehouse-savings.html
