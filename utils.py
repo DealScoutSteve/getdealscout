@@ -9,6 +9,81 @@ def get_airtable_table(table_name):
         table_name
     )
 
+# NEW FUNCTIONS for costco_to_airtable.py
+
+def create_product(product_data):
+    """
+    Create a new product in Airtable
+    
+    Args:
+        product_data: Dict with product fields
+        
+    Returns:
+        Created record
+    """
+    products_table = get_airtable_table('Products')
+    return products_table.create(product_data)
+
+def find_product_by_costco_sku(costco_sku):
+    """
+    Find a product by Costco SKU
+    
+    Args:
+        costco_sku: Costco item number
+        
+    Returns:
+        Record if found, None otherwise
+    """
+    products_table = get_airtable_table('Products')
+    formula = f"{{Costco SKU}} = '{costco_sku}'"
+    results = products_table.all(formula=formula)
+    return results[0] if results else None
+
+def find_product_by_amazon_asin(asin):
+    """
+    Find a product by Amazon ASIN
+    
+    Args:
+        asin: Amazon ASIN
+        
+    Returns:
+        Record if found, None otherwise
+    """
+    products_table = get_airtable_table('Products')
+    formula = f"{{Amazon ASIN}} = '{asin}'"
+    results = products_table.all(formula=formula)
+    return results[0] if results else None
+
+def update_product(record_id, updates):
+    """
+    Update a product record
+    
+    Args:
+        record_id: Airtable record ID
+        updates: Dict with fields to update
+        
+    Returns:
+        Updated record
+    """
+    products_table = get_airtable_table('Products')
+    return products_table.update(record_id, updates)
+
+def get_products_by_status(status):
+    """
+    Get products by status
+    
+    Args:
+        status: Status value (e.g., 'New', 'Matched', 'Profitable')
+        
+    Returns:
+        List of matching records
+    """
+    products_table = get_airtable_table('Products')
+    formula = f"{{Status}} = '{status}'"
+    return products_table.all(formula=formula)
+
+# ORIGINAL FUNCTIONS (keeping for backwards compatibility)
+
 def save_opportunity(opportunity):
     """Save opportunity to Airtable Products table"""
     products_table = get_airtable_table('Products')
