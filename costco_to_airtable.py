@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+"""
+Fetch Costco deals and save to Airtable
+
+This script:
+1. Fetches deals from Costco's API
+2. Parses product data
+3. Saves to Airtable Products table
+"""
+
 import requests
 import json
 from datetime import datetime
@@ -37,10 +47,10 @@ def fetch_costco_deals(max_products=100, sort_by='item_page_views desc'):
     for start in range(0, max_products, 24):
         params = {
             'expoption': 'lucidworks',
-            'q': 'OFF',  # Search for deals
+            'q': 'OFF',
             'locale': 'en-US',
             'start': start,
-            'rows': min(24, max_products - start),  # Don't exceed max_products
+            'rows': min(24, max_products - start),
             'sort': sort_by
         }
         
@@ -55,7 +65,6 @@ def fetch_costco_deals(max_products=100, sort_by='item_page_views desc'):
             
             all_products.extend(products)
             
-            # Stop if we got fewer results than requested (end of results)
             if len(products) < params['rows']:
                 break
                 
@@ -72,3 +81,112 @@ def parse_product(item):
     
     Args:
         item: Raw product dict from Costco API
+        
+    Returns:
+        Dict formatted for Airtable Products table
+    """
+    
+    discount_text = item.get('item_product_marketing_statement', '')
+    
+    discount_amount = None
+    if 'OFF' in discount_text:
+        if '-' in discount_text:
+            try:
+                discount_amount = float(discount_text.split('$')[1].split()[0])
+            except:
+                pass
+        else:
+            try:
+                discount_amount = float(discount_text.replace('$', '').replace('OFF', '').strip())
+            except:
+                pass
+    
+    return {
+        'Product Name': item.get('item_product_name', 'Unknown'),
+        'Costco SKU': item.get('item_number'),
+        'Costco Price': item.get('item_location_pricing_salePrice'),
+        'Costco Original Price': item.get('item_location_pricing_listPrice'),
+        'Costco Discount': discount_amount,
+        'In Stock': item.get('item_location_availability') == 'in stock',
+        'Brand': item.get('Brand_attr', [None])[0] if item.get('Brand_attr') else None,
+        'Rating': item.get('item_ratings'),
+        'Image URL': item.get('item_collateral_primaryimage'),
+        'Costco URL': f"https://www.costco.com/p/-/{item.get('item_number')}" if item.get('item_number') else None,
+        'Last Updated': datetime.now().isoformat(),
+        'Status': 'New'
+    }
+
+def save_to_airtable(products):
+    """
+    Save products to Airtable
+    
+    Args:
+        products: List of product dicts (Airtable formatted)
+        
+    Returns:
+        Number of products saved
+    """
+    
+    print(f"\n💾 Saving {len(products)} products to Airtable...")
+    
+    saved_count = 0
+    skipped_count = 0
+    error_count = 0
+    
+    for product in products:
+        try:
+            costco_sku = product.get('Costco SKU')
+            if costco_sku:
+                existing = utils.find_product_by_costco_sku(costco_sku)
+                
+                if existing:
+                    print(f"   ⏭️  Skipping {costco_sku} (already exists)")
+                    skipped_count += 1
+                    continue
+            
+            utils.create_product(product)
+            print(f"   ✅ Saved: {product['Product Name'][:50]}... (${product['Costco Price']})")
+            saved_count += 1
+            
+        except Exception as e:
+            print(f"   ❌ Error saving product: {e}")
+            error_count += 1
+    
+    print(f"\n📊 Summary:")
+    print(f"   ✅ Saved: {saved_count}")
+    print(f"   ⏭️  Skipped (duplicates): {skipped_count}")
+    print(f"   ❌ Errors: {error_count}")
+    
+    return saved_count
+
+def main():
+    """Main execution"""
+    
+    print("=" * 70)
+    print("🛒 COSTCO TO AIRTABLE SYNC")
+    print("=" * 70)
+    print()
+    
+    raw_products = fetch_costco_deals(max_products=50)
+    
+    if not raw_products:
+        print("❌ No products fetched. Exiting.")
+        return
+    
+    print()
+    
+    print("📋 Parsing products...")
+    parsed_products = [parse_product(item) for item in raw_products]
+    print(f"✅ Parsed {len(parsed_products)} products")
+    
+    print()
+    
+    saved = save_to_airtable(parsed_products)
+    
+    print()
+    print("=" * 70)
+    print(f"✅ SYNC COMPLETE! Saved {saved} new products to Airtable")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    main()
