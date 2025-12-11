@@ -1,4 +1,5 @@
 from pyairtable import Table
+from datetime import datetime
 import config
 
 def get_airtable_table(table_name):
@@ -9,7 +10,7 @@ def get_airtable_table(table_name):
         table_name
     )
 
-# NEW FUNCTIONS for costco_to_airtable.py
+# PRODUCT FUNCTIONS
 
 def create_product(product_data):
     """
@@ -82,6 +83,34 @@ def get_products_by_status(status):
     formula = f"{{Status}} = '{status}'"
     return products_table.all(formula=formula)
 
+# PRICE HISTORY FUNCTIONS
+
+def log_price_history(product_id, costco_sku, product_name, old_price, new_price):
+    """
+    Log a price change to Price History table
+    
+    Args:
+        product_id: Airtable Products record ID
+        costco_sku: Costco SKU
+        product_name: Product name
+        old_price: Previous price
+        new_price: New price
+        
+    Returns:
+        Created history record
+    """
+    history_table = get_airtable_table('Price History')
+    
+    return history_table.create({
+        'Product': [product_id],  # Link to Products table
+        'Costco SKU': costco_sku,
+        'Product Name': product_name,
+        'Old Price': old_price,
+        'New Price': new_price,
+        'Price Change': new_price - old_price if old_price and new_price else 0,
+        'Date': datetime.now().isoformat()
+    })
+
 # ORIGINAL FUNCTIONS (keeping for backwards compatibility)
 
 def save_opportunity(opportunity):
@@ -93,7 +122,7 @@ def save_opportunity(opportunity):
         'Costco SKU': opportunity['costco_sku'],
         'Costco Price': opportunity['costco_price'],
         'Costco URL': opportunity['costco_url'],
-        'Amazon ASIN': opportunity.get('amazon_asin', ''),
+        'Amazon SKU': opportunity.get('amazon_asin', ''),
         'Amazon Price': opportunity.get('amazon_price', 0),
         'Amazon URL': opportunity.get('amazon_url', ''),
         'FBA Fees': opportunity.get('fba_fees', 0),
@@ -112,7 +141,6 @@ def clear_old_products(days=7):
     products_table = get_airtable_table('Products')
     cutoff_date = datetime.now() - timedelta(days=days)
     
-    # Airtable formula to find old records
     formula = f"IS_BEFORE({{Date Found}}, '{cutoff_date.isoformat()}')"
     
     old_records = products_table.all(formula=formula)
