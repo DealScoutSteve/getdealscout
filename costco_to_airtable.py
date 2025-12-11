@@ -102,19 +102,10 @@ def parse_product(item):
             except:
                 pass
     
-    # Extract product name and brand
-    product_name = item.get('item_product_name', 'Unknown')
-    brand = item.get('Brand_attr', [None])[0] if item.get('Brand_attr') else None
-    
-    # Determine product group (for better organization)
-    product_group = 'Unknown'
-    if brand:
-        product_group = brand
-    
+    # DON'T include Product Group - it's a computed formula field in Airtable
     return {
-        'Product Name': product_name,
-        'Product Group': product_group,
-        'Brand': brand,
+        'Product Name': item.get('item_product_name', 'Unknown'),
+        'Brand': item.get('Brand_attr', [None])[0] if item.get('Brand_attr') else None,
         'Costco SKU': item.get('item_number'),
         'Costco Price': item.get('item_location_pricing_salePrice'),
         'Costco Original Price': item.get('item_location_pricing_listPrice'),
