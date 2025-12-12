@@ -57,9 +57,7 @@ def search_amazon_product(product_name, brand=None):
     params = {
         'key': KEEPA_API_KEY,
         'domain': 1,  # 1 = Amazon.com (US)
-        'term': search_query,
-        'page': 0,
-        'perPage': 1  # Just get top result
+        'term': search_query
     }
     
     try:
