@@ -3,7 +3,7 @@ name: Match Amazon - Continuous (Every 10 Minutes)
 on:
   schedule:
     # Run every 10 minutes
-    - cron: '*/10 * * * *'
+    - cron: '*/9 * * * *'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
