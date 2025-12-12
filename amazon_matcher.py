@@ -12,6 +12,7 @@ This script:
 
 import requests
 import time
+import json
 from datetime import datetime
 import config
 import utils
@@ -29,7 +30,7 @@ MIN_OFFERS = 2                  # Minimum FBA sellers for confidence
 
 def search_amazon_product(product_name, brand=None):
     """
-    Search for product on Amazon via Keepa's dedicated search API
+    Search for product on Amazon via Keepa's /search endpoint
     
     Args:
         product_name: Product name from Costco (cleaned)
@@ -47,40 +48,60 @@ def search_amazon_product(product_name, brand=None):
     # Clean up query
     search_query = search_query.replace(',', '').replace('  ', ' ')[:100]
     
-    # Use the /search endpoint (not /product)
+    print(f"   🔍 Query: '{search_query}'")
+    
+    # STEP 1: Search for ASIN using /search endpoint
     url = f"{KEEPA_BASE_URL}/search"
     params = {
         'key': KEEPA_API_KEY,
         'domain': 1,  # 1 = Amazon.com (US)
         'term': search_query,
-        'stats': 1,  # Include statistics
-        'page': 0,   # First page of results
-        'perPage': 1  # Just get the top result
+        'stats': 1,
+        'page': 0,
+        'perPage': 1  # Just get top result
     }
     
     try:
         response = requests.get(url, params=params, timeout=30)
+        
+        print(f"   📡 Search status: {response.status_code}")
+        
         response.raise_for_status()
         
         data = response.json()
         
-        # /search returns: {"asinList": [...], "categoryList": [...]}
+        print(f"   📦 Response keys: {list(data.keys())}")
+        
+        # Check for errors
+        if 'error' in data:
+            print(f"   ❌ Keepa error: {data['error'].get('message', data['error'])}")
+            return None
+        
+        # /search returns: {"asinList": [...]}
         if 'asinList' in data and len(data['asinList']) > 0:
-            # Get the first (best) match ASIN
             best_asin = data['asinList'][0]
+            print(f"   🎯 Found ASIN: {best_asin}")
             
-            # Now fetch full product details using /product endpoint
+            # STEP 2: Get product details
             return fetch_product_details(best_asin)
         else:
+            print(f"   ❌ No results found")
             return None
             
+    except requests.exceptions.HTTPError as e:
+        print(f"   ❌ HTTP Error: {e}")
+        try:
+            print(f"   Response: {response.text[:300]}")
+        except:
+            pass
+        return None
     except Exception as e:
-        print(f"   ⚠️  Keepa API error: {e}")
+        print(f"   ⚠️  Search error: {e}")
         return None
 
 def fetch_product_details(asin):
     """
-    Fetch full product details for a given ASIN
+    Fetch full product details for a given ASIN using /product endpoint
     
     Args:
         asin: Amazon ASIN
@@ -89,13 +110,15 @@ def fetch_product_details(asin):
         Dict with parsed product data
     """
     
+    print(f"   📥 Fetching details for {asin}...")
+    
     url = f"{KEEPA_BASE_URL}/product"
     params = {
         'key': KEEPA_API_KEY,
         'domain': 1,
         'asin': asin,
-        'stats': 90,  # 90-day statistics
-        'offers': 20  # Get offer data
+        'stats': 90,
+        'offers': 20
     }
     
     try:
@@ -108,10 +131,11 @@ def fetch_product_details(asin):
             product = data['products'][0]
             return parse_keepa_product(product)
         else:
+            print(f"   ❌ No product data returned")
             return None
             
     except Exception as e:
-        print(f"   ⚠️  Keepa product fetch error: {e}")
+        print(f"   ⚠️  Fetch error: {e}")
         return None
 
 def parse_keepa_product(keepa_data):
@@ -125,25 +149,19 @@ def parse_keepa_product(keepa_data):
         Dict with parsed Amazon data
     """
     
-    # Keepa stores prices in "Keepa Time" and "Keepa Price" formats
-    # Prices are in cents, need to divide by 100
-    
-    # Get current Amazon BUY BOX price (what customers actually pay)
+    # Get current Amazon BUY BOX price
     amazon_price = None
     price_history = []
     
     if keepa_data.get('csv') and len(keepa_data['csv']) > 0:
-        # CSV index 1 = Amazon Buy Box price (NEW condition)
         if len(keepa_data['csv']) > 1 and keepa_data['csv'][1]:
             price_data = keepa_data['csv'][1]
             
-            # Get latest price
             if len(price_data) > 0:
                 latest_price = price_data[-1]
                 if latest_price > 0:
                     amazon_price = latest_price / 100.0
             
-            # Get price history for validation
             price_history = [p / 100.0 for p in price_data if p > 0]
     
     # Get FBA fees
@@ -153,15 +171,15 @@ def parse_keepa_product(keepa_data):
         storage = keepa_data['fbaFees'].get('storageFee', 0)
         fba_fees = (pick_pack + storage) / 100.0
     
-    # Get sales rank (lower = better/faster selling)
+    # Get sales rank
     sales_rank = None
     if keepa_data.get('csv') and len(keepa_data['csv']) > 3:
-        if keepa_data['csv'][3]:  # Sales rank data
+        if keepa_data['csv'][3]:
             latest_rank = keepa_data['csv'][3][-1]
             if latest_rank > 0:
                 sales_rank = latest_rank
     
-    # Get offer count (how many FBA sellers)
+    # Get offer count
     offer_count = keepa_data.get('offerCountFBA', 0)
     
     # Get category
@@ -192,27 +210,13 @@ def parse_keepa_product(keepa_data):
 def calculate_profit(costco_price, amazon_price, fba_fees):
     """
     Calculate arbitrage profit and ROI
-    
-    Args:
-        costco_price: Cost to buy from Costco
-        amazon_price: Selling price on Amazon (Buy Box)
-        fba_fees: Amazon FBA fulfillment fees
-        
-    Returns:
-        Dict with profit and ROI
     """
     
     if not costco_price or not amazon_price:
         return {'profit': None, 'roi': None}
     
-    # Amazon referral fee (typically 15% for most categories)
     amazon_referral = amazon_price * 0.15
-    
-    # Calculate profit
-    # Profit = Amazon Price - Costco Cost - FBA Fees - Amazon Referral
     profit = amazon_price - costco_price - fba_fees - amazon_referral
-    
-    # ROI percentage
     roi = (profit / costco_price) * 100 if costco_price > 0 else 0
     
     return {
@@ -223,25 +227,12 @@ def calculate_profit(costco_price, amazon_price, fba_fees):
 def validate_opportunity(amazon_data, profit):
     """
     Validate if this is a real, reliable arbitrage opportunity
-    
-    Uses multiple signals:
-    - Sales rank (does it actually sell?)
-    - Profit margin (is it worth it?)
-    - Offer count (is price stable?)
-    - Price history (is current price typical?)
-    
-    Args:
-        amazon_data: Dict with Amazon product data
-        profit: Calculated profit amount
-        
-    Returns:
-        Tuple of (is_valid, confidence_score, status, warnings)
     """
     
     warnings = []
-    confidence = 50  # Start at neutral
+    confidence = 50
     
-    # === VALIDATION 1: Sales Rank (Product Velocity) ===
+    # Sales Rank
     sales_rank = amazon_data.get('sales_rank')
     if sales_rank:
         if sales_rank < SALES_RANK_EXCELLENT:
@@ -260,7 +251,7 @@ def validate_opportunity(amazon_data, profit):
         confidence -= 10
         warnings.append("⚠️ No sales rank data")
     
-    # === VALIDATION 2: Profit Margin ===
+    # Profit Margin
     if profit:
         if profit >= 50:
             confidence += 20
@@ -278,7 +269,7 @@ def validate_opportunity(amazon_data, profit):
         confidence -= 40
         warnings.append("❌ No profit data")
     
-    # === VALIDATION 3: Competition/Offer Count ===
+    # Competition
     offer_count = amazon_data.get('offer_count', 0)
     if offer_count >= 5:
         confidence += 10
@@ -290,7 +281,7 @@ def validate_opportunity(amazon_data, profit):
         confidence -= 15
         warnings.append(f"❌ Limited sellers ({offer_count})")
     
-    # === VALIDATION 4: Price Stability ===
+    # Price Stability
     price_history = amazon_data.get('price_history', [])
     current_price = amazon_data.get('amazon_price')
     
@@ -298,29 +289,27 @@ def validate_opportunity(amazon_data, profit):
         avg_price = sum(price_history) / len(price_history)
         price_variance = abs(current_price - avg_price) / avg_price
         
-        if price_variance < 0.10:  # Within 10% of average
+        if price_variance < 0.10:
             confidence += 10
             warnings.append(f"✅ Stable price (${current_price:.2f})")
-        elif price_variance < 0.25:  # Within 25%
+        elif price_variance < 0.25:
             confidence += 5
             warnings.append(f"⚠️ Price varies (${current_price:.2f} vs avg ${avg_price:.2f})")
         else:
             confidence -= 15
             warnings.append(f"❌ Volatile price (${current_price:.2f} vs avg ${avg_price:.2f})")
     
-    # === DETERMINE STATUS ===
+    # Determine Status
     if confidence >= 80:
-        status = 'Profitable'  # High confidence - BUY!
+        status = 'Profitable'
     elif confidence >= 60:
-        status = 'Potential'   # Worth investigating
+        status = 'Potential'
     elif confidence >= 40:
-        status = 'Risky'       # Proceed with caution
+        status = 'Risky'
     else:
-        status = 'Skip'        # Not worth it
+        status = 'Skip'
     
-    # Ensure confidence is 0-100
     confidence = max(0, min(100, confidence))
-    
     is_valid = confidence >= 60
     
     return is_valid, confidence, status, warnings
@@ -340,14 +329,20 @@ def match_products(test_mode=False):
     print("=" * 70)
     print()
     
-    # Get products that need Amazon matching
-    products = utils.get_products_by_status('New')
+    # Get products that need matching
+    # TEMP: In test mode, get ANY products for debugging
+    if test_mode:
+        all_products = utils.get_all_products()
+        products = all_products[:5]  # Just first 5 for testing
+        print("🔧 DEBUG MODE: Testing with first 5 products (any status)")
+    else:
+        products = utils.get_products_by_status('New')
     
     if not products:
         print("📭 No new products to match. All done!")
         return
     
-    # LIMIT TO 5 IN TEST MODE
+    # Limit in test mode
     if test_mode:
         products = products[:5]
     
@@ -361,6 +356,8 @@ def match_products(test_mode=False):
     
     for i, record in enumerate(products, 1):
         fields = record['fields']
+        
+        # Use cleaned name if available, otherwise original
         product_name = fields.get('Cleaned Product Name') or fields.get('Product Name')
         brand = fields.get('Brand')
         costco_price = fields.get('Costco Price', 0)
@@ -406,8 +403,7 @@ def match_products(test_mode=False):
             print(f"   💰 Amazon: ${amazon_data['amazon_price']:.2f} | Profit: {profit_str} | ROI: {roi_str}")
             print(f"   📊 Confidence: {confidence}% | Status: {status}")
             
-            # Show key warnings
-            for warning in warnings[:2]:  # Top 2 most important
+            for warning in warnings[:2]:
                 print(f"      {warning}")
             
             matched_count += 1
@@ -427,7 +423,7 @@ def match_products(test_mode=False):
         
         print()
         
-        # Rate limiting: Keepa allows ~1 request per second
+        # Rate limiting
         time.sleep(1.1)
     
     print("=" * 70)
