@@ -1,14 +1,12 @@
 name: Match Amazon Products
 
 on:
-  workflow_dispatch:  # Manual trigger for testing
-  
-  # Uncomment after testing to run automatically after Costco sync
+  workflow_dispatch:
   # schedule:
-  #   - cron: '30 10 * * *'  # 2:30 AM PST (30 min after Costco sync)
+  #   - cron: '30 10 * * *'  # 2:30 AM PST
 
 jobs:
-  match:
+  clean-and-match:
     runs-on: ubuntu-latest
     
     steps:
@@ -24,7 +22,15 @@ jobs:
         run: |
           pip install -r requirements.txt
       
-      - name: Match products with Amazon (Keepa)
+      - name: Clean product names (if needed)
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python clean_product_names.py
+      
+      - name: Match products with Amazon
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
@@ -35,5 +41,4 @@ jobs:
       - name: Report completion
         if: always()
         run: |
-          echo "Amazon matching completed at $(date)"
-          echo "Check Airtable for updated products with Opportunity Scores!"
+          echo "Matching completed at $(date)"
