@@ -325,22 +325,31 @@ def validate_opportunity(amazon_data, profit):
     
     return is_valid, confidence, status, warnings
 
-def match_products():
+def match_products(test_mode=False):
     """
     Main function to match Costco products with Amazon
+    
+    Args:
+        test_mode: If True, only process first 5 products
     """
     
     print("=" * 70)
     print("🔍 AMAZON PRODUCT MATCHING WITH VALIDATION")
+    if test_mode:
+        print("🧪 TEST MODE - Processing only 5 products")
     print("=" * 70)
     print()
     
-    # Get products that need Amazon matching (Status = 'New')
+    # Get products that need Amazon matching
     products = utils.get_products_by_status('New')
     
     if not products:
         print("📭 No new products to match. All done!")
         return
+    
+    # LIMIT TO 5 IN TEST MODE
+    if test_mode:
+        products = products[:5]
     
     print(f"📦 Found {len(products)} products to match")
     print()
@@ -433,4 +442,6 @@ def match_products():
     print("💡 TIP: Filter Airtable by Status='Profitable' to see best deals!")
 
 if __name__ == "__main__":
-    match_products()
+    # TEST MODE: Set to True for testing, False for full run
+    TEST_MODE = True  # ← Change to False after testing
+    match_products(test_mode=TEST_MODE)
