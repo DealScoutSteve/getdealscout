@@ -1,0 +1,40 @@
+name: Clean Product Names
+
+on:
+  schedule:
+    # Run once daily at 2:00 AM PST (10:00 AM UTC)
+    # This runs BEFORE continuous matching starts
+    - cron: '0 10 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  clean-names:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Clean Product Names
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "🧹 Cleaning product names for better Amazon matching"
+          echo "📋 This improves search accuracy by removing pack sizes and extra details"
+          python clean_product_names.py
+      
+      - name: Summary
+        run: |
+          echo "✅ Product name cleaning completed"
+          echo "⏭️  Continuous matching will use cleaned names for better results"
