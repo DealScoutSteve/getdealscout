@@ -301,9 +301,7 @@ def match_products(test_mode=False):
                 'FBA Fees': amazon_data['fba_fees'],
                 'Sales Rank': amazon_data['sales_rank'],
                 'Category': amazon_data['category'],
-                'Profit': profit_data['profit'],
-                'ROI %': profit_data['roi'],
-                'Opportunity Score': confidence,
+                'Confidence Score': confidence,  # NEW field (writable number)
                 'Status': status,
                 'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
             })
