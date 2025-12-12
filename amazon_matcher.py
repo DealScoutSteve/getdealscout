@@ -848,13 +848,13 @@ def match_products(test_mode=False, batch_size=None, max_days_old=14, check_toke
                 
                 matched_count += 1
                 
-        else:
-            utils.update_product(record['id'], {
-                'Status': 'Not Found',
-                'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            })
-            print(f"   ❌ Not found on Amazon")
-            not_found_count += 1
+            else:
+                utils.update_product(record['id'], {
+                    'Status': 'Not Found',
+                    'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                })
+                print(f"   ❌ Not found on Amazon")
+                not_found_count += 1
         
         print()
         time.sleep(1.1)
