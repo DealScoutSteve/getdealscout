@@ -701,6 +701,18 @@ def match_products(test_mode=False, batch_size=None, max_days_old=14, check_toke
     for i, record in enumerate(products, 1):
         fields = record['fields']
         
+        # LOCK: Set Status to "Matching" to claim this product
+        # This prevents other concurrent jobs from picking the same product
+        try:
+            utils.update_product(record['id'], {
+                'Status': 'Matching',
+                'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            })
+            print(f"🔒 Locked product for matching")
+        except Exception as e:
+            print(f"⚠️  Could not lock product: {e}")
+            continue
+        
         # Get product details
         original_name = fields.get('Product Name')
         cleaned_name = fields.get('Cleaned Product Name')
@@ -708,7 +720,7 @@ def match_products(test_mode=False, batch_size=None, max_days_old=14, check_toke
         brand = fields.get('Brand')
         costco_price = fields.get('Costco Price', 0)
         costco_sku = fields.get('Costco SKU')
-        status = fields.get('Status')
+        status = fields.get('Status')  # This is the OLD status before we locked it
         
         print(f"[{i}/{len(products)}] {search_name[:60]}...")
         
