@@ -1,0 +1,43 @@
+name: Match Amazon - Continuous (Every 10 Minutes)
+
+on:
+  schedule:
+    # Run every 10 minutes
+    - cron: '*/10 * * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  match-continuous:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Match 1 Product (Continuous Mode)
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "⚡ Continuous matching: Processing 1 product"
+          echo "⏱️  Runs every 10 minutes (6 products/hour)"
+          echo "🪙 Token usage: 10 tokens per run"
+          echo "📊 Daily capacity: 144 products"
+          python amazon_matcher_v3.py --batch-size=1 --max-days-old=14 --check-tokens
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "✅ Continuous matching run completed"
+          echo "⏭️  Next run in 10 minutes"
