@@ -314,7 +314,7 @@ def match_products():
     
     for i, record in enumerate(products, 1):
         fields = record['fields']
-        product_name = fields.get('Product Name', 'Unknown')
+        product_name = fields.get('Cleaned Product Name') or fields.get('Product Name')
         brand = fields.get('Brand')
         costco_price = fields.get('Costco Price', 0)
         
