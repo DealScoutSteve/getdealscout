@@ -57,7 +57,218 @@ def check_token_status():
         print(f"⚠️  Could not check token status: {e}")
         return None
 
+def fetch_product_by_asin(asin):
+    """
+    Fetch a specific product from Keepa by ASIN (for override functionality)
+    
+    Args:
+        asin: Amazon ASIN to fetch
+        
+    Returns:
+        Parsed product data or None if error
+    """
+    print(f"   🔍 Fetching ASIN: {asin}")
+    
+    url = f"{KEEPA_BASE_URL}/product"
+    params = {
+        'key': KEEPA_API_KEY,
+        'domain': 1,  # US Amazon
+        'asin': asin,
+        'stats': 90  # Include 90-day stats
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        
+        print(f"   📡 Status: {response.status_code}")
+        
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Check for errors
+        if 'error' in data:
+            print(f"   ❌ Keepa error: {data['error'].get('message', data['error'])}")
+            return None
+        
+        # Product endpoint returns products array
+        if 'products' in data and len(data['products']) > 0:
+            print(f"   ✅ Product found")
+            product = data['products'][0]
+            return parse_keepa_product(product)
+        else:
+            print(f"   ❌ Product not found")
+            return None
+            
+    except requests.exceptions.HTTPError as e:
+        print(f"   ❌ HTTP Error: {e}")
+        try:
+            print(f"   Response: {response.text[:300]}")
+        except:
+            pass
+        return None
+    except Exception as e:
+        print(f"   ⚠️  Error: {e}")
+        return None
+
 def validate_best_amazon_match(costco_product, amazon_results):
+    """
+    Use AI to evaluate all Amazon results and pick the best match
+    Enhanced with product metadata for higher accuracy
+    
+    Args:
+        costco_product: Dict with Costco product details (name, brand, price, etc.)
+        amazon_results: List of Keepa product objects (raw from API)
+        
+    Returns:
+        Best matching product data or None if no good match
+    """
+    from openai import OpenAI
+    
+    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    
+    # Parse all results and format for AI with enhanced metadata
+    results_text = ""
+    for i, result in enumerate(amazon_results[:10], 1):
+        # Parse to get metadata
+        parsed = parse_keepa_product(result)
+        
+        title = parsed.get('title', 'No title')
+        asin = parsed.get('asin', 'No ASIN')
+        price = parsed.get('amazon_price')
+        item_count = parsed.get('item_count', 1)
+        weight = parsed.get('package_weight')
+        dims = parsed.get('package_dimensions')
+        category = parsed.get('category', 'Unknown')
+        
+        # Build detailed result line
+        result_line = f"{i}. [{asin}] {title}"
+        
+        # Add metadata if available
+        meta = []
+        if price:
+            meta.append(f"${price:.2f}")
+        if item_count and item_count > 1:
+            meta.append(f"Pack of {item_count}")
+        if weight:
+            meta.append(f"{weight:.2f} lbs")
+        if dims:
+            meta.append(f"{dims['length']:.1f}×{dims['width']:.1f}×{dims['height']:.1f} in")
+        meta.append(category)
+        
+        if meta:
+            result_line += f" | {' | '.join(meta)}"
+        
+        results_text += result_line + "\n"
+    
+    # Build comprehensive prompt with full context
+    full_name = costco_product['name']
+    cleaned_name = costco_product.get('cleaned_name', '')
+    brand = costco_product.get('brand', 'Unknown')
+    costco_price = costco_product.get('price', 0)
+    
+    prompt = f"""You are an expert at matching retail products between Costco and Amazon.
+
+Costco Product Details:
+- Full Name: {full_name}
+- Brand: {brand}
+- Price: ${costco_price:.2f}
+- Costco SKU: {costco_product.get('sku', 'N/A')}
+{f"- Cleaned Search Name: {cleaned_name}" if cleaned_name else ""}
+
+Amazon Search Results (pick the best match):
+{results_text}
+
+Critical Matching Rules:
+1. **Brand MUST match exactly** (case-insensitive) - If brand doesn't match, confidence = 0
+2. **Product type must be identical** (laptop vs tablet, toothpaste vs mouthwash, etc.)
+3. **Pack quantity must match** - Pay CLOSE attention to pack counts:
+   - "5-pack" in Costco = "Pack of 5" or "5-Count" on Amazon
+   - Single item ≠ Multi-pack
+   - If Costco shows pack size, Amazon MUST show same pack size
+4. **Key specifications must match**:
+   - Storage (16GB vs 32GB vs 64GB, etc.)
+   - Screen size (11-inch vs 13-inch)
+   - Weight/Volume (5.9 oz vs 3.5 oz)
+   - Model numbers if present
+5. **Price sanity check** - Amazon price should be in similar range to Costco (not 10× different)
+6. **Category match** - Electronics should match Electronics, Health products should match Health, etc.
+7. **Minor wording differences are OK** - Capitalization, punctuation, word order variations
+
+Examples of GOOD matches:
+- Costco: "HP Laptop 17.3 inch, 16GB RAM, 1TB SSD" → Amazon: "HP 17.3" Laptop with 16GB Memory and 1TB Storage" ✅
+- Costco: "Crest Toothpaste, 5.9 oz, 5-pack" → Amazon: "Crest Pro-Health Advanced, 5.9oz, Pack of 5" ✅
+- Costco: "iPad Air 11-inch, 128GB" → Amazon: "Apple iPad Air 11-inch (M3, 128GB)" ✅
+
+Examples of BAD matches (return confidence 0):
+- Costco: "HP Laptop 16GB" → Amazon: "HP Laptop 8GB" ❌ (wrong spec)
+- Costco: "Toothpaste 5-pack" → Amazon: "Toothpaste Single Tube" ❌ (wrong quantity)
+- Costco: "11-inch iPad" → Amazon: "13-inch iPad" ❌ (wrong size)
+- Costco: "Crest Toothpaste" → Amazon: "Colgate Toothpaste" ❌ (wrong brand)
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{{
+    "best_match_index": 1,
+    "confidence": 95,
+    "reason": "Exact match: same brand, specs, and pack size"
+}}
+
+If no good match exists (brand mismatch, wrong specs, wrong quantity), return:
+{{
+    "best_match_index": 0,
+    "confidence": 0,
+    "reason": "No match found - [specific reason]"
+}}
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a product matching expert. Return ONLY valid JSON with no markdown formatting. Be STRICT about pack quantities and specifications."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+        
+        ai_response = response.choices[0].message.content.strip()
+        
+        # Clean response (remove markdown if present)
+        if '```json' in ai_response:
+            ai_response = ai_response.split('```json')[1].split('```')[0]
+        elif '```' in ai_response:
+            ai_response = ai_response.split('```')[1].split('```')[0]
+        
+        match_data = json.loads(ai_response.strip())
+        
+        confidence = match_data.get('confidence', 0)
+        
+        if confidence >= 75:  # High confidence threshold
+            best_index = match_data['best_match_index'] - 1  # Convert to 0-indexed
+            reason = match_data.get('reason', 'AI validation passed')
+            
+            print(f"   🤖 AI picked result #{match_data['best_match_index']}: {confidence}% confidence")
+            print(f"      Reason: {reason}")
+            
+            # Return both product data AND confidence
+            product_data = parse_keepa_product(amazon_results[best_index])
+            product_data['match_confidence'] = confidence  # Add confidence to return data
+            return product_data
+        else:
+            reason = match_data.get('reason', 'Low confidence match')
+            print(f"   ❌ AI confidence too low ({confidence}%)")
+            print(f"      Reason: {reason}")
+            return None
+            
+    except Exception as e:
+        print(f"   ⚠️  AI validation error: {e}")
+        # Fallback: use first result with default confidence
+        print(f"   ⚠️  Falling back to first result")
+        if amazon_results:
+            product_data = parse_keepa_product(amazon_results[0])
+            product_data['match_confidence'] = 70  # Default fallback confidence
+            return product_data
+        return None
     """
     Use AI to evaluate all Amazon results and pick the best match
     
@@ -225,7 +436,9 @@ def search_amazon_product(product_name, brand=None):
         return None
 
 def parse_keepa_product(keepa_data):
-    """Parse Keepa product data"""
+    """
+    Parse Keepa product data with enhanced metadata for AI validation
+    """
     
     # Get Buy Box price
     amazon_price = None
@@ -265,6 +478,23 @@ def parse_keepa_product(keepa_data):
     if keepa_data.get('categoryTree') and len(keepa_data['categoryTree']) > 0:
         category = keepa_data['categoryTree'][0].get('name', 'Unknown')
     
+    # Extract enhanced metadata for AI validation
+    package_dimensions = None
+    if keepa_data.get('packageHeight') and keepa_data.get('packageLength') and keepa_data.get('packageWidth'):
+        # Keepa returns in hundredths of inches
+        package_dimensions = {
+            'height': keepa_data['packageHeight'] / 100.0,
+            'length': keepa_data['packageLength'] / 100.0,
+            'width': keepa_data['packageWidth'] / 100.0
+        }
+    
+    package_weight = None
+    if keepa_data.get('packageWeight'):
+        # Keepa returns in grams, convert to pounds
+        package_weight = keepa_data['packageWeight'] / 453.592
+    
+    item_count = keepa_data.get('itemCount', 1)  # Number of items in pack
+    
     return {
         'asin': keepa_data.get('asin'),
         'title': keepa_data.get('title'),
@@ -274,7 +504,11 @@ def parse_keepa_product(keepa_data):
         'sales_rank': sales_rank,
         'category': category,
         'offer_count': offer_count,
-        'price_history': price_history
+        'price_history': price_history,
+        # Enhanced metadata for AI validation
+        'package_dimensions': package_dimensions,
+        'package_weight': package_weight,
+        'item_count': item_count
     }
 
 def calculate_profit(costco_price, amazon_price, fba_fees):
@@ -380,7 +614,7 @@ def validate_opportunity(amazon_data, profit):
 
 def match_products(test_mode=False, batch_size=None, max_days_old=14, check_tokens=False):
     """
-    Main matching function with smart update scheduling
+    Main matching function with smart update scheduling and ASIN override support
     
     Args:
         test_mode: Process only 5 products for testing
@@ -410,37 +644,44 @@ def match_products(test_mode=False, batch_size=None, max_days_old=14, check_toke
             return
         print()
     
-    # Get products smartly
+    # Get products smartly with new priority queue
     if test_mode:
         all_products = utils.get_all_products()
         products = all_products[:5]
         print("🔧 DEBUG MODE: Testing with first 5 products (any status)")
     else:
-        # Priority 1: New products (never matched)
+        # Priority 1: ASIN Override (highest priority - human provided)
+        asin_override_products = utils.get_products_by_status('ASIN Override')
+        
+        # Priority 2: New products (never matched)
         new_products = utils.get_products_by_status('New')
         
-        # Priority 2: Products not updated in last X days
+        # Priority 3: Matched products that need re-checking
         cutoff_date = datetime.now() - timedelta(days=max_days_old)
         cutoff_str = cutoff_date.strftime('%Y-%m-%dT%H:%M:%S.000Z')
         
-        # Get all matched products
-        all_matched = utils.get_airtable_table('Products').all(
-            formula=f"AND({{Status}} != 'New', OR({{Last Updated}} = BLANK(), IS_BEFORE({{Last Updated}}, '{cutoff_str}')))"
+        # Get matched products older than cutoff
+        matched_old = utils.get_airtable_table('Products').all(
+            formula=f"AND({{Status}} = 'Matched', OR({{Last Updated}} = BLANK(), IS_BEFORE({{Last Updated}}, '{cutoff_str}')))"
         )
         
-        # Sort matched products: Profitable first, then oldest
-        profitable_old = [p for p in all_matched if p['fields'].get('Status') == 'Profitable']
-        potential_old = [p for p in all_matched if p['fields'].get('Status') == 'Potential']
-        other_old = [p for p in all_matched if p['fields'].get('Status') not in ['Profitable', 'Potential']]
+        # Sort matched products by: low confidence first, then oldest
+        # This ensures we re-check uncertain matches before confident ones
+        matched_old_sorted = sorted(
+            matched_old,
+            key=lambda p: (
+                p['fields'].get('Match Confidence Score', 100),  # Lower confidence first
+                p['fields'].get('Last Updated', '1970-01-01')   # Then oldest
+            )
+        )
         
-        # Combine: New → Profitable Old → Potential Old → Other Old
-        products = new_products + profitable_old + potential_old + other_old
+        # Combine: ASIN Override → New → Matched (low confidence + old)
+        products = asin_override_products + new_products + matched_old_sorted
         
         print(f"📋 Priority queue:")
+        print(f"   🔧 ASIN Override: {len(asin_override_products)}")
         print(f"   🆕 New products: {len(new_products)}")
-        print(f"   💰 Profitable (>{max_days_old}d old): {len(profitable_old)}")
-        print(f"   ⚠️  Potential (>{max_days_old}d old): {len(potential_old)}")
-        print(f"   📦 Other (>{max_days_old}d old): {len(other_old)}")
+        print(f"   📦 Matched (>{max_days_old}d old, needs re-check): {len(matched_old_sorted)}")
         
         # Apply batch size limit if specified
         if batch_size and len(products) > batch_size:
@@ -456,94 +697,156 @@ def match_products(test_mode=False, batch_size=None, max_days_old=14, check_toke
     
     matched_count = 0
     not_found_count = 0
-    profitable_count = 0
-    potential_count = 0
     
     for i, record in enumerate(products, 1):
         fields = record['fields']
         
-        # Get both names for different purposes
+        # Get product details
         original_name = fields.get('Product Name')
         cleaned_name = fields.get('Cleaned Product Name')
-        search_name = cleaned_name or original_name  # Use cleaned for search
+        search_name = cleaned_name or original_name
         brand = fields.get('Brand')
         costco_price = fields.get('Costco Price', 0)
         costco_sku = fields.get('Costco SKU')
+        status = fields.get('Status')
         
         print(f"[{i}/{len(products)}] {search_name[:60]}...")
         
-        # Search Amazon via Keepa (returns list of results)
-        amazon_results = search_amazon_product(search_name, brand)
-        
-        # Use AI to validate and pick best match
-        # Pass BOTH names for better context!
-        if amazon_results:
-            amazon_data = validate_best_amazon_match({
-                'name': original_name,  # Full Costco name for AI context
-                'cleaned_name': cleaned_name,  # Cleaned name for reference
-                'brand': brand,
-                'price': costco_price,
-                'sku': costco_sku
-            }, amazon_results)
+        # Handle ASIN Override status differently
+        if status == 'ASIN Override':
+            override_asin = fields.get('Override Amazon ASIN')
+            
+            if not override_asin:
+                print(f"   ⚠️  ASIN Override status but no Override ASIN provided")
+                continue
+            
+            print(f"   🔧 ASIN Override: Using {override_asin}")
+            
+            # Fetch specific ASIN from Keepa
+            amazon_data = fetch_product_by_asin(override_asin)
+            
+            if amazon_data and amazon_data['amazon_price']:
+                # ASIN Override assumes 100% confidence (human verified)
+                match_confidence = 100
+                
+                profit_data = calculate_profit(
+                    costco_price,
+                    amazon_data['amazon_price'],
+                    amazon_data['fba_fees']
+                )
+                
+                # Check if price changed for history
+                old_amazon_price = fields.get('Amazon Price')
+                price_changed = old_amazon_price and old_amazon_price != amazon_data['amazon_price']
+                
+                # Update product with Override results
+                utils.update_product(record['id'], {
+                    'Amazon ASIN': amazon_data['asin'],
+                    'Amazon Price': amazon_data['amazon_price'],
+                    'Amazon URL': amazon_data['amazon_url'],
+                    'FBA Fees': amazon_data['fba_fees'],
+                    'Sales Rank': amazon_data['sales_rank'],
+                    'Category': amazon_data['category'],
+                    'Match Confidence Score': match_confidence,  # Renamed field
+                    'Status': 'Matched',  # Change from ASIN Override to Matched
+                    'Override Amazon ASIN': '',  # Clear the override field
+                    'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                })
+                
+                # Create Price History if price changed
+                if price_changed:
+                    try:
+                        utils.create_price_history(
+                            costco_sku=costco_sku,
+                            product_name=original_name,
+                            old_price=old_amazon_price,
+                            new_price=amazon_data['amazon_price'],
+                            product_record_id=record['id']
+                        )
+                        print(f"   📊 Price changed: ${old_amazon_price:.2f} → ${amazon_data['amazon_price']:.2f}")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not create price history: {e}")
+                
+                profit_str = f"${profit_data['profit']:.2f}" if profit_data['profit'] else "N/A"
+                roi_str = f"{profit_data['roi']:.1f}%" if profit_data['roi'] else "N/A"
+                
+                print(f"   ✅ ASIN Override processed successfully")
+                print(f"   💰 Amazon: ${amazon_data['amazon_price']:.2f} | Profit: {profit_str} | ROI: {roi_str}")
+                print(f"   📊 Match Confidence: 100% (human verified)")
+                
+                matched_count += 1
+            else:
+                utils.update_product(record['id'], {
+                    'Status': 'Not Found',
+                    'Override Amazon ASIN': '',  # Clear invalid override
+                    'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                })
+                print(f"   ❌ Override ASIN not found on Amazon")
+                not_found_count += 1
+            
         else:
-            amazon_data = None
-        
-        if amazon_data and amazon_data['amazon_price']:
-            profit_data = calculate_profit(
-                costco_price,
-                amazon_data['amazon_price'],
-                amazon_data['fba_fees']
-            )
+            # Normal matching flow (New or Matched status)
+            amazon_results = search_amazon_product(search_name, brand)
             
-            is_valid, confidence, status, warnings = validate_opportunity(
-                amazon_data,
-                profit_data['profit']
-            )
+            # Use AI to validate and pick best match
+            if amazon_results:
+                amazon_data = validate_best_amazon_match({
+                    'name': original_name,
+                    'cleaned_name': cleaned_name,
+                    'brand': brand,
+                    'price': costco_price,
+                    'sku': costco_sku
+                }, amazon_results)
+            else:
+                amazon_data = None
             
-            # Check if Amazon price changed (for price history)
-            old_amazon_price = fields.get('Amazon Price')
-            price_changed = old_amazon_price and old_amazon_price != amazon_data['amazon_price']
-            
-            utils.update_product(record['id'], {
-                'Amazon ASIN': amazon_data['asin'],
-                'Amazon Price': amazon_data['amazon_price'],
-                'Amazon URL': amazon_data['amazon_url'],
-                'FBA Fees': amazon_data['fba_fees'],
-                'Sales Rank': amazon_data['sales_rank'],
-                'Category': amazon_data['category'],
-                'Confidence Score': confidence,  # NEW field (writable number)
-                'Status': status,
-                'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            })
-            
-            # Create Price History record if price changed
-            if price_changed:
-                try:
-                    utils.create_price_history(
-                        costco_sku=fields.get('Costco SKU'),
-                        product_name=fields.get('Product Name'),
-                        old_price=old_amazon_price,
-                        new_price=amazon_data['amazon_price'],
-                        product_record_id=record['id']
-                    )
-                    print(f"   📊 Price changed: ${old_amazon_price:.2f} → ${amazon_data['amazon_price']:.2f}")
-                except Exception as e:
-                    print(f"   ⚠️  Could not create price history: {e}")
-            
-            profit_str = f"${profit_data['profit']:.2f}" if profit_data['profit'] else "N/A"
-            roi_str = f"{profit_data['roi']:.1f}%" if profit_data['roi'] else "N/A"
-            
-            print(f"   💰 Amazon: ${amazon_data['amazon_price']:.2f} | Profit: {profit_str} | ROI: {roi_str}")
-            print(f"   📊 Confidence: {confidence}% | Status: {status}")
-            
-            for warning in warnings[:2]:
-                print(f"      {warning}")
-            
-            matched_count += 1
-            if status == 'Profitable':
-                profitable_count += 1
-            elif status == 'Potential':
-                potential_count += 1
+            if amazon_data and amazon_data['amazon_price']:
+                profit_data = calculate_profit(
+                    costco_price,
+                    amazon_data['amazon_price'],
+                    amazon_data['fba_fees']
+                )
+                
+                # Get Match Confidence from AI validation
+                match_confidence = amazon_data.get('match_confidence', 85)  # Use AI confidence
+                
+                # Check if Amazon price changed (for price history)
+                old_amazon_price = fields.get('Amazon Price')
+                price_changed = old_amazon_price and old_amazon_price != amazon_data['amazon_price']
+                
+                utils.update_product(record['id'], {
+                    'Amazon ASIN': amazon_data['asin'],
+                    'Amazon Price': amazon_data['amazon_price'],
+                    'Amazon URL': amazon_data['amazon_url'],
+                    'FBA Fees': amazon_data['fba_fees'],
+                    'Sales Rank': amazon_data['sales_rank'],
+                    'Category': amazon_data['category'],
+                    'Match Confidence Score': match_confidence,  # AI match quality score
+                    'Status': 'Matched',  # All successful matches are now 'Matched'
+                    'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                })
+                
+                # Create Price History record if price changed
+                if price_changed:
+                    try:
+                        utils.create_price_history(
+                            costco_sku=costco_sku,
+                            product_name=original_name,
+                            old_price=old_amazon_price,
+                            new_price=amazon_data['amazon_price'],
+                            product_record_id=record['id']
+                        )
+                        print(f"   📊 Price changed: ${old_amazon_price:.2f} → ${amazon_data['amazon_price']:.2f}")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not create price history: {e}")
+                
+                profit_str = f"${profit_data['profit']:.2f}" if profit_data['profit'] else "N/A"
+                roi_str = f"{profit_data['roi']:.1f}%" if profit_data['roi'] else "N/A"
+                
+                print(f"   💰 Amazon: ${amazon_data['amazon_price']:.2f} | Profit: {profit_str} | ROI: {roi_str}")
+                print(f"   📊 Match Confidence: {match_confidence}%")
+                
+                matched_count += 1
                 
         else:
             utils.update_product(record['id'], {
@@ -560,12 +863,10 @@ def match_products(test_mode=False, batch_size=None, max_days_old=14, check_toke
     print("📊 MATCHING SUMMARY")
     print("=" * 70)
     print(f"✅ Total matched: {matched_count}")
-    print(f"💰 Profitable (80%+ confidence): {profitable_count}")
-    print(f"⚠️  Potential (60-79% confidence): {potential_count}")
     print(f"❌ Not found: {not_found_count}")
     print("=" * 70)
     print()
-    print("💡 TIP: Filter Airtable by Status='Profitable' to see best deals!")
+    print("💡 TIP: Check Opportunity Score in Airtable for deal quality!")
 
 if __name__ == "__main__":
     import sys
