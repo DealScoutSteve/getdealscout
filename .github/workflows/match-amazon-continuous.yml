@@ -1,13 +1,14 @@
-name: Match Amazon - Continuous (Every 8 Minutes)
+name: Match Amazon - Continuous (Every 20 Minutes)
 
 on:
   schedule:
-    # Run every 8 minutes
-    - cron: '*/8 * * * *'
+    # Run every 20 minutes (more reliable than 10)
+    # Processes 2 products per run = 6 products/hour
+    - cron: '*/20 * * * *'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
-  match-continuous:
+  match-product-1:
     runs-on: ubuntu-latest
     
     steps:
@@ -23,21 +24,44 @@ jobs:
         run: |
           pip install -r requirements.txt
       
-      - name: Match 1 Product (Continuous Mode)
+      - name: Match Product 1
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
           KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          echo "⚡ Continuous matching: Processing 1 product"
-          echo "⏱️  Runs every 8 minutes (6 products/hour)"
-          echo "🪙 Token usage: 10 tokens per run"
-          echo "📊 Daily capacity: 144 products"
+          echo "⚡ Run 1/2: Processing product from priority queue"
+          python amazon_matcher.py --batch-size=1 --max-days-old=14 --check-tokens
+
+  match-product-2:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Match Product 2
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          KEEPA_API_KEY: ${{ secrets.KEEPA_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "⚡ Run 2/2: Processing product from priority queue"
           python amazon_matcher.py --batch-size=1 --max-days-old=14 --check-tokens
       
       - name: Summary
         if: always()
         run: |
           echo "✅ Continuous matching run completed"
-          echo "⏭️  Next run in 8 minutes"
+          echo "⏭️  Next run in 10 minutes"
