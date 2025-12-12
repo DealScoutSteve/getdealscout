@@ -151,3 +151,12 @@ def clear_old_products(days=7):
     
     print(f"Cleaned up {len(old_records)} old records")
 
+def get_all_products():
+    """
+    Get all products from Airtable
+    
+    Returns:
+        List of all product records
+    """
+    products_table = get_airtable_table('Products')
+    return products_table.all()
