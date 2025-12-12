@@ -29,10 +29,10 @@ MIN_OFFERS = 2                  # Minimum FBA sellers for confidence
 
 def search_amazon_product(product_name, brand=None):
     """
-    Search for product on Amazon via Keepa
+    Search for product on Amazon via Keepa's dedicated search API
     
     Args:
-        product_name: Product name from Costco
+        product_name: Product name from Costco (cleaned)
         brand: Brand name (optional, improves accuracy)
         
     Returns:
@@ -44,18 +44,18 @@ def search_amazon_product(product_name, brand=None):
     if brand:
         search_query = f"{brand} {product_name}"
     
-    # Clean up query (remove special chars that confuse search)
+    # Clean up query
     search_query = search_query.replace(',', '').replace('  ', ' ')[:100]
     
-    url = f"{KEEPA_BASE_URL}/product"
+    # Use the /search endpoint (not /product)
+    url = f"{KEEPA_BASE_URL}/search"
     params = {
         'key': KEEPA_API_KEY,
         'domain': 1,  # 1 = Amazon.com (US)
-        'type': 'search',
         'term': search_query,
-        'stats': 90,  # Get 90-day stats
-        'only-live-offers': 1,  # Only products currently for sale
-        'offers': 20  # Get offer data for validation
+        'stats': 1,  # Include statistics
+        'page': 0,   # First page of results
+        'perPage': 1  # Just get the top result
     }
     
     try:
@@ -64,16 +64,54 @@ def search_amazon_product(product_name, brand=None):
         
         data = response.json()
         
-        # Check if we got results
+        # /search returns: {"asinList": [...], "categoryList": [...]}
+        if 'asinList' in data and len(data['asinList']) > 0:
+            # Get the first (best) match ASIN
+            best_asin = data['asinList'][0]
+            
+            # Now fetch full product details using /product endpoint
+            return fetch_product_details(best_asin)
+        else:
+            return None
+            
+    except Exception as e:
+        print(f"   ⚠️  Keepa API error: {e}")
+        return None
+
+def fetch_product_details(asin):
+    """
+    Fetch full product details for a given ASIN
+    
+    Args:
+        asin: Amazon ASIN
+        
+    Returns:
+        Dict with parsed product data
+    """
+    
+    url = f"{KEEPA_BASE_URL}/product"
+    params = {
+        'key': KEEPA_API_KEY,
+        'domain': 1,
+        'asin': asin,
+        'stats': 90,  # 90-day statistics
+        'offers': 20  # Get offer data
+    }
+    
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        
         if 'products' in data and len(data['products']) > 0:
-            # Return first match (best match by relevance)
             product = data['products'][0]
             return parse_keepa_product(product)
         else:
             return None
             
     except Exception as e:
-        print(f"   ⚠️  Keepa API error: {e}")
+        print(f"   ⚠️  Keepa product fetch error: {e}")
         return None
 
 def parse_keepa_product(keepa_data):
