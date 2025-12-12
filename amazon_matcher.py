@@ -20,9 +20,149 @@ SALES_RANK_POOR = 100000
 MIN_PROFIT = 10.0
 MIN_OFFERS = 2
 
+def check_token_status():
+    """
+    Check Keepa token status to see if we have enough tokens
+    
+    Endpoint: https://keepa.com/#!discuss/t/retrieve-token-status/1305
+    
+    Returns:
+        dict with token info or None if error
+    """
+    url = f"{KEEPA_BASE_URL}/token"
+    params = {'key': KEEPA_API_KEY}
+    
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        tokens_left = data.get('tokensLeft', 0)
+        refill_in = data.get('refillIn', 0)  # milliseconds
+        refill_rate = data.get('refillRate', 0)  # tokens per minute
+        
+        print(f"🪙 Token Status:")
+        print(f"   Available: {tokens_left}")
+        print(f"   Refill rate: {refill_rate}/min")
+        print(f"   Next refill: {refill_in/1000:.0f}s")
+        
+        return {
+            'tokens_left': tokens_left,
+            'refill_in_ms': refill_in,
+            'refill_rate': refill_rate,
+            'has_enough': tokens_left >= 10
+        }
+        
+    except Exception as e:
+        print(f"⚠️  Could not check token status: {e}")
+        return None
+
+def validate_best_amazon_match(costco_product, amazon_results):
+    """
+    Use AI to evaluate all Amazon results and pick the best match
+    
+    Args:
+        costco_product: Dict with Costco product details (name, brand, price, etc.)
+        amazon_results: List of Keepa product objects
+        
+    Returns:
+        Best matching product data or None if no good match
+    """
+    from openai import OpenAI
+    
+    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    
+    # Format results for AI
+    results_text = ""
+    for i, result in enumerate(amazon_results[:10], 1):
+        title = result.get('title', 'No title')
+        asin = result.get('asin', 'No ASIN')
+        results_text += f"{i}. [{asin}] {title}\n"
+    
+    # Build comprehensive prompt with full context
+    full_name = costco_product['name']
+    cleaned_name = costco_product.get('cleaned_name', '')
+    brand = costco_product.get('brand', 'Unknown')
+    
+    prompt = f"""You are an expert at matching retail products between Costco and Amazon.
+
+Costco Product Details:
+- Full Name: {full_name}
+- Brand: {brand}
+- Costco SKU: {costco_product.get('sku', 'N/A')}
+{f"- Cleaned Search Name: {cleaned_name}" if cleaned_name else ""}
+
+Amazon Search Results (pick the best match):
+{results_text}
+
+Matching Rules:
+1. Brand MUST match exactly (case-insensitive)
+2. Product type must be the same (laptop vs tablet, toothpaste vs mouthwash, etc.)
+3. Prefer EXACT quantity/size matches (5-pack = 5-pack, 16GB = 16GB, NOT single unit)
+4. Pay attention to key specs from full name (RAM, storage, screen size, oz, count, etc.)
+5. Minor wording differences are OK (capitalization, punctuation, word order)
+6. If no good match exists, return confidence 0
+
+Examples of GOOD matches:
+- Costco: "HP Laptop 17.3 inch, 16GB RAM, 1TB SSD" → Amazon: "HP 17.3" Laptop with 16GB Memory and 1TB Storage" ✅
+- Costco: "Crest Toothpaste, 5.9 oz, 5-pack" → Amazon: "Crest Pro-Health Advanced, 5.9oz, Pack of 5" ✅
+
+Examples of BAD matches:
+- Costco: "HP Laptop 16GB" → Amazon: "HP Laptop 8GB" ❌ (wrong spec)
+- Costco: "Toothpaste 5-pack" → Amazon: "Toothpaste Single Tube" ❌ (wrong quantity)
+
+Return ONLY valid JSON (no markdown, no code blocks):
+{{
+    "best_match_index": 1,
+    "confidence": 95,
+    "reason": "Exact match: same brand, specs, and pack size"
+}}
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a product matching expert. Return ONLY valid JSON with no markdown formatting."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+        
+        ai_response = response.choices[0].message.content.strip()
+        
+        # Clean response (remove markdown if present)
+        if '```json' in ai_response:
+            ai_response = ai_response.split('```json')[1].split('```')[0]
+        elif '```' in ai_response:
+            ai_response = ai_response.split('```')[1].split('```')[0]
+        
+        match_data = json.loads(ai_response.strip())
+        
+        confidence = match_data.get('confidence', 0)
+        
+        if confidence >= 75:  # High confidence threshold
+            best_index = match_data['best_match_index'] - 1  # Convert to 0-indexed
+            reason = match_data.get('reason', 'AI validation passed')
+            
+            print(f"   🤖 AI picked result #{match_data['best_match_index']}: {confidence}% confidence")
+            print(f"      Reason: {reason}")
+            
+            return parse_keepa_product(amazon_results[best_index])
+        else:
+            print(f"   ❌ AI confidence too low ({confidence}%) - no good match")
+            return None
+            
+    except Exception as e:
+        print(f"   ⚠️  AI validation error: {e}")
+        # Fallback: use first result
+        print(f"   ⚠️  Falling back to first result")
+        return parse_keepa_product(amazon_results[0]) if amazon_results else None
+
 def search_amazon_product(product_name, brand=None):
     """
     Search Amazon using Keepa's /search endpoint (Product Search)
+    Returns top results for AI validation
     
     Docs: https://keepa.com/#!discuss/t/product-searches/109
     Cost: 10 tokens per page (up to 10 results)
@@ -67,9 +207,8 @@ def search_amazon_product(product_name, brand=None):
         # /search returns products array with full product objects
         if 'products' in data and len(data['products']) > 0:
             print(f"   ✅ Found {len(data['products'])} results")
-            # Return first (best) match
-            product = data['products'][0]
-            return parse_keepa_product(product)
+            # Return ALL results for AI validation
+            return data['products']
         else:
             print(f"   ❌ No products returned")
             return None
@@ -239,23 +378,74 @@ def validate_opportunity(amazon_data, profit):
     
     return is_valid, confidence, status, warnings
 
-def match_products(test_mode=False):
-    """Main matching function"""
+def match_products(test_mode=False, batch_size=None, max_days_old=14, check_tokens=False):
+    """
+    Main matching function with smart update scheduling
+    
+    Args:
+        test_mode: Process only 5 products for testing
+        batch_size: Max products to process (for token management)
+        max_days_old: Re-match products older than this many days (default: 14)
+        check_tokens: Check token availability before processing
+    """
+    from datetime import datetime, timedelta
     
     print("=" * 70)
     print("🔍 AMAZON PRODUCT MATCHING WITH VALIDATION")
     if test_mode:
         print("🧪 TEST MODE - Processing only 5 products")
+    elif batch_size == 1:
+        print("⚡ CONTINUOUS MODE - Processing 1 product every 10 minutes")
+    elif batch_size:
+        print(f"📦 BATCH MODE - Processing up to {batch_size} products")
     print("=" * 70)
     print()
     
-    # Get products
+    # Check token status if requested
+    if check_tokens:
+        token_status = check_token_status()
+        if token_status and not token_status['has_enough']:
+            print(f"⏸️  Insufficient tokens ({token_status['tokens_left']}/10 needed)")
+            print(f"⏰ Wait {token_status['refill_in_ms']/1000:.0f}s for next token")
+            return
+        print()
+    
+    # Get products smartly
     if test_mode:
         all_products = utils.get_all_products()
         products = all_products[:5]
         print("🔧 DEBUG MODE: Testing with first 5 products (any status)")
     else:
-        products = utils.get_products_by_status('New')
+        # Priority 1: New products (never matched)
+        new_products = utils.get_products_by_status('New')
+        
+        # Priority 2: Products not updated in last X days
+        cutoff_date = datetime.now() - timedelta(days=max_days_old)
+        cutoff_str = cutoff_date.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        
+        # Get all matched products
+        all_matched = utils.get_airtable_table('Products').all(
+            formula=f"AND({{Status}} != 'New', OR({{Last Updated}} = BLANK(), IS_BEFORE({{Last Updated}}, '{cutoff_str}')))"
+        )
+        
+        # Sort matched products: Profitable first, then oldest
+        profitable_old = [p for p in all_matched if p['fields'].get('Status') == 'Profitable']
+        potential_old = [p for p in all_matched if p['fields'].get('Status') == 'Potential']
+        other_old = [p for p in all_matched if p['fields'].get('Status') not in ['Profitable', 'Potential']]
+        
+        # Combine: New → Profitable Old → Potential Old → Other Old
+        products = new_products + profitable_old + potential_old + other_old
+        
+        print(f"📋 Priority queue:")
+        print(f"   🆕 New products: {len(new_products)}")
+        print(f"   💰 Profitable (>{max_days_old}d old): {len(profitable_old)}")
+        print(f"   ⚠️  Potential (>{max_days_old}d old): {len(potential_old)}")
+        print(f"   📦 Other (>{max_days_old}d old): {len(other_old)}")
+        
+        # Apply batch size limit if specified
+        if batch_size and len(products) > batch_size:
+            print(f"⚠️  Limiting to {batch_size} products (token management)")
+            products = products[:batch_size]
     
     if not products:
         print("📭 No products to match!")
@@ -272,13 +462,31 @@ def match_products(test_mode=False):
     for i, record in enumerate(products, 1):
         fields = record['fields']
         
-        product_name = fields.get('Cleaned Product Name') or fields.get('Product Name')
+        # Get both names for different purposes
+        original_name = fields.get('Product Name')
+        cleaned_name = fields.get('Cleaned Product Name')
+        search_name = cleaned_name or original_name  # Use cleaned for search
         brand = fields.get('Brand')
         costco_price = fields.get('Costco Price', 0)
+        costco_sku = fields.get('Costco SKU')
         
-        print(f"[{i}/{len(products)}] {product_name[:60]}...")
+        print(f"[{i}/{len(products)}] {search_name[:60]}...")
         
-        amazon_data = search_amazon_product(product_name, brand)
+        # Search Amazon via Keepa (returns list of results)
+        amazon_results = search_amazon_product(search_name, brand)
+        
+        # Use AI to validate and pick best match
+        # Pass BOTH names for better context!
+        if amazon_results:
+            amazon_data = validate_best_amazon_match({
+                'name': original_name,  # Full Costco name for AI context
+                'cleaned_name': cleaned_name,  # Cleaned name for reference
+                'brand': brand,
+                'price': costco_price,
+                'sku': costco_sku
+            }, amazon_results)
+        else:
+            amazon_data = None
         
         if amazon_data and amazon_data['amazon_price']:
             profit_data = calculate_profit(
@@ -360,5 +568,18 @@ def match_products(test_mode=False):
     print("💡 TIP: Filter Airtable by Status='Profitable' to see best deals!")
 
 if __name__ == "__main__":
-    TEST_MODE = True
-    match_products(test_mode=TEST_MODE)
+    import sys
+    
+    # Parse command line arguments
+    TEST_MODE = '--test' in sys.argv
+    CHECK_TOKENS = '--check-tokens' in sys.argv
+    batch_size = None
+    max_days_old = 14  # Default: re-match products older than 14 days
+    
+    for arg in sys.argv[1:]:
+        if arg.startswith('--batch-size='):
+            batch_size = int(arg.split('=')[1])
+        elif arg.startswith('--max-days-old='):
+            max_days_old = int(arg.split('=')[1])
+    
+    match_products(test_mode=TEST_MODE, batch_size=batch_size, max_days_old=max_days_old, check_tokens=CHECK_TOKENS)
