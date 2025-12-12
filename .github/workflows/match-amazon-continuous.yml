@@ -1,9 +1,9 @@
-name: Match Amazon - Continuous (Every 9 Minutes)
+name: Match Amazon - Continuous (Every 8 Minutes)
 
 on:
   schedule:
-    # Run every 9 minutes
-    - cron: '*/9 * * * *'
+    # Run every 8 minutes
+    - cron: '*/8 * * * *'
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           echo "⚡ Continuous matching: Processing 1 product"
-          echo "⏱️  Runs every 9 minutes (6 products/hour)"
+          echo "⏱️  Runs every 8 minutes (6 products/hour)"
           echo "🪙 Token usage: 10 tokens per run"
           echo "📊 Daily capacity: 144 products"
           python amazon_matcher.py --batch-size=1 --max-days-old=14 --check-tokens
@@ -40,4 +40,4 @@ jobs:
         if: always()
         run: |
           echo "✅ Continuous matching run completed"
-          echo "⏭️  Next run in 9 minutes"
+          echo "⏭️  Next run in 8 minutes"
