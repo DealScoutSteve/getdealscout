@@ -34,7 +34,7 @@ jobs:
           echo "⏱️  Runs every 10 minutes (6 products/hour)"
           echo "🪙 Token usage: 10 tokens per run"
           echo "📊 Daily capacity: 144 products"
-          python amazon_matcher_v3.py --batch-size=1 --max-days-old=14 --check-tokens
+          python amazon_matcher.py --batch-size=1 --max-days-old=14 --check-tokens
       
       - name: Summary
         if: always()
