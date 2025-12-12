@@ -231,10 +231,8 @@ def validate_opportunity(amazon_data, profit):
         status = 'Profitable'
     elif confidence >= 60:
         status = 'Potential'
-    elif confidence >= 40:
-        status = 'Risky'
     else:
-        status = 'Skip'
+        status = 'Risky'  # Changed from 'Skip' - anything below 60% is risky
     
     confidence = max(0, min(100, confidence))
     is_valid = confidence >= 60
@@ -294,6 +292,10 @@ def match_products(test_mode=False):
                 profit_data['profit']
             )
             
+            # Check if Amazon price changed (for price history)
+            old_amazon_price = fields.get('Amazon Price')
+            price_changed = old_amazon_price and old_amazon_price != amazon_data['amazon_price']
+            
             utils.update_product(record['id'], {
                 'Amazon ASIN': amazon_data['asin'],
                 'Amazon Price': amazon_data['amazon_price'],
@@ -305,6 +307,20 @@ def match_products(test_mode=False):
                 'Status': status,
                 'Last Updated': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z')
             })
+            
+            # Create Price History record if price changed
+            if price_changed:
+                try:
+                    utils.create_price_history(
+                        costco_sku=fields.get('Costco SKU'),
+                        product_name=fields.get('Product Name'),
+                        old_price=old_amazon_price,
+                        new_price=amazon_data['amazon_price'],
+                        product_record_id=record['id']
+                    )
+                    print(f"   📊 Price changed: ${old_amazon_price:.2f} → ${amazon_data['amazon_price']:.2f}")
+                except Exception as e:
+                    print(f"   ⚠️  Could not create price history: {e}")
             
             profit_str = f"${profit_data['profit']:.2f}" if profit_data['profit'] else "N/A"
             roi_str = f"{profit_data['roi']:.1f}%" if profit_data['roi'] else "N/A"
