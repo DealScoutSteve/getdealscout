@@ -40,4 +40,4 @@ jobs:
         if: always()
         run: |
           echo "✅ Continuous matching run completed"
-          echo "⏭️  Next run in 10 minutes"
+          echo "⏭️  Next run in 9 minutes"
