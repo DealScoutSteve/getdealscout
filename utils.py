@@ -1,5 +1,4 @@
 from pyairtable import Table
-from datetime import datetime
 import config
 
 def get_airtable_table(table_name):
@@ -10,7 +9,7 @@ def get_airtable_table(table_name):
         table_name
     )
 
-# PRODUCT FUNCTIONS
+# NEW FUNCTIONS for costco_to_airtable.py
 
 def create_product(product_data):
     """
@@ -83,32 +82,38 @@ def get_products_by_status(status):
     formula = f"{{Status}} = '{status}'"
     return products_table.all(formula=formula)
 
-# PRICE HISTORY FUNCTIONS
-
-def log_price_history(product_id, costco_sku, product_name, old_price, new_price):
+def get_all_products():
     """
-    Log a price change to Price History table
+    Get all products from Airtable
+    
+    Returns:
+        List of all product records
+    """
+    products_table = get_airtable_table('Products')
+    return products_table.all()
+
+def create_price_history(costco_sku, product_name, old_price, new_price, product_record_id):
+    """
+    Create a Price History record when Amazon price changes
     
     Args:
-        product_id: Airtable Products record ID
         costco_sku: Costco SKU
         product_name: Product name
-        old_price: Previous price
-        new_price: New price
-        
-    Returns:
-        Created history record
+        old_price: Previous Amazon price
+        new_price: Current Amazon price
+        product_record_id: Record ID to link back to Products table
     """
-    history_table = get_airtable_table('Price History')
+    from datetime import datetime
     
-    return history_table.create({
-        'Product': [product_id],  # Link to Products table
+    price_history_table = get_airtable_table('Price History')
+    
+    return price_history_table.create({
         'Costco SKU': costco_sku,
         'Product Name': product_name,
         'Old Price': old_price,
         'New Price': new_price,
-        'Price Change': new_price - old_price if old_price and new_price else 0,
-        'Date': datetime.now().isoformat()
+        'Date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+        'Product': [product_record_id]  # Link to Products table
     })
 
 # ORIGINAL FUNCTIONS (keeping for backwards compatibility)
@@ -122,7 +127,7 @@ def save_opportunity(opportunity):
         'Costco SKU': opportunity['costco_sku'],
         'Costco Price': opportunity['costco_price'],
         'Costco URL': opportunity['costco_url'],
-        'Amazon SKU': opportunity.get('amazon_asin', ''),
+        'Amazon ASIN': opportunity.get('amazon_asin', ''),
         'Amazon Price': opportunity.get('amazon_price', 0),
         'Amazon URL': opportunity.get('amazon_url', ''),
         'FBA Fees': opportunity.get('fba_fees', 0),
@@ -141,6 +146,7 @@ def clear_old_products(days=7):
     products_table = get_airtable_table('Products')
     cutoff_date = datetime.now() - timedelta(days=days)
     
+    # Airtable formula to find old records
     formula = f"IS_BEFORE({{Date Found}}, '{cutoff_date.isoformat()}')"
     
     old_records = products_table.all(formula=formula)
@@ -150,13 +156,3 @@ def clear_old_products(days=7):
         print(f"🗑️ Deleted old record: {record['fields'].get('Product Name')}")
     
     print(f"Cleaned up {len(old_records)} old records")
-
-def get_all_products():
-    """
-    Get all products from Airtable
-    
-    Returns:
-        List of all product records
-    """
-    products_table = get_airtable_table('Products')
-    return products_table.all()
