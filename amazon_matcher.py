@@ -42,7 +42,9 @@ def search_amazon_product(product_name, brand=None):
     
     # Build search query
     search_query = product_name
-    if brand:
+    
+    # Only add brand if it's not already in the product name
+    if brand and brand.lower() not in product_name.lower():
         search_query = f"{brand} {product_name}"
     
     # Clean up query
@@ -56,7 +58,6 @@ def search_amazon_product(product_name, brand=None):
         'key': KEEPA_API_KEY,
         'domain': 1,  # 1 = Amazon.com (US)
         'term': search_query,
-        'stats': 1,
         'page': 0,
         'perPage': 1  # Just get top result
     }
